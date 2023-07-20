@@ -1,0 +1,219 @@
+---
+title: "Impact Evaluation Final - Evaluating the ACA's Impact on Out of Pocket Costs"
+output: html_notebook
+---
+
+```{r}
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(estimatr)
+```
+
+
+```{r}
+aca <- read_excel("C:/Users/abact/Downloads/Impact Final ACA Data.xlsx", na = "..")
+View(aca)
+```
+
+```{r}
+long_df <- pivot_longer(aca, cols = matches("^\\d{4}$"), names_to = "Year", values_to = "Value")
+
+aca <- pivot_wider(long_df, names_from = "Series Name", values_from = "Value")
+
+print(aca)
+```
+
+```{r}
+aca_2000 <- aca %>%
+  filter(across(starts_with("Year"), ~ as.numeric(.) >= 2000))
+
+aca_2000$Year <- as.numeric(aca_2000$Year)
+
+aca_2000$Post <- ifelse(aca_2000$Year >= 2010, 1, 0)
+
+aca_2000$Treat <- ifelse(aca_2000$`Country Name` == 'United States', 1, 0)
+
+print(aca_2000)
+```
+
+```{r}
+na_counts <- colSums(is.na(aca_2000))
+
+print(na_counts)
+```
+
+```{r}
+aca_2000 <- subset(aca_2000, select = -`Births attended by skilled health staff (% of total)`)
+```
+
+
+```{r}
+ggplot(aca_2000, aes(x = Year, y = `Out-of-pocket expenditure per capita (current US$)`, color = `Country Name`)) +
+  geom_line() +
+  labs(x = "Year", y = "Out-of-pocket expenditure per capita (current US$)", color = "Country") +
+  theme_minimal()
+```
+
+
+
+Testing Parallel Trend Assumption
+
+```{r}
+aca_2000_2009 <- subset(aca_2000, Year >= 2000 & Year <= 2009)
+```
+
+
+```{r}
+australia <- lm(`Out-of-pocket expenditure per capita (current US$)` ~ Year, data = subset(aca_2000_2009, `Country Name` == 'Australia'))
+australia.coefficient <- coef(australia)
+
+france <- lm(`Out-of-pocket expenditure per capita (current US$)` ~ Year, data = subset(aca_2000_2009, `Country Name` == 'France'))
+france.coefficient <- coef(france)
+
+germany <- lm(`Out-of-pocket expenditure per capita (current US$)` ~ Year, data = subset(aca_2000_2009, `Country Name` == 'Germany'))
+germany.coefficient <- coef(germany)
+
+japan <- lm(`Out-of-pocket expenditure per capita (current US$)` ~ Year, data = subset(aca_2000_2009, `Country Name` == 'Japan'))
+japan.coefficient <- coef(japan)
+
+uk <- lm(`Out-of-pocket expenditure per capita (current US$)` ~ Year, data = subset(aca_2000_2009, `Country Name` == 'United Kingdom'))
+uk.coefficient <- coef(uk)
+
+us <- lm(`Out-of-pocket expenditure per capita (current US$)` ~ Year, data = subset(aca_2000_2009, `Country Name` == 'United States'))
+us.coefficient <- coef(us)
+
+canada <- lm(`Out-of-pocket expenditure per capita (current US$)` ~ Year, data = subset(aca_2000_2009, `Country Name` == 'Canada'))
+canada.coefficient <- coef(canada)
+
+```
+
+```{r}
+# Create a data frame to store the coefficients
+coefficients_table <- data.frame(
+  Country = c("Australia", "France", "Germany", "Japan", "United Kingdom", "United States", "Canada"),
+  Intercept = c(australia.coefficient[1],france.coefficient[1], germany.coefficient[1], japan.coefficient[1],
+                uk.coefficient[1], us.coefficient[1], canada.coefficient[1]),
+  Year_Coefficient = c(australia.coefficient[2], france.coefficient[2], germany.coefficient[2], japan.coefficient[2],
+                       uk.coefficient[2], us.coefficient[2], canada.coefficient[2])
+)
+
+# Print the coefficients table
+print(coefficients_table)
+```
+
+```{r}
+aca_2000 <- aca_2000 %>%
+  filter(`Country Name` != 'Australia')
+```
+
+Simple DiD
+```{r}
+diff_in_diff <- aggregate(`Out-of-pocket expenditure per capita (current US$)` ~ Post + Treat, data = aca_2000, FUN = mean)
+
+print(diff_in_diff)
+```
+
+OLS DiD
+```{r}
+model1 <- lm_robust(`Out-of-pocket expenditure per capita (current US$)` ~ Post + Treat + Post:Treat, data = aca_2000, clusters = `Country Name`)
+
+summary(model1)
+```
+
+Time Trend
+```{r}
+model2 <- lm_robust(`Out-of-pocket expenditure per capita (current US$)` ~ Post + Treat + Post:Treat + as.factor(Year), data = aca_2000, clusters = `Country Name`)
+
+summary(model2)
+```
+
+
+Variable Time Trend
+
+```{r}
+countries <- c("France", "Germany", "Japan", "United Kingdom", "United States", "Canada")
+
+for (country in countries) {
+  column_name <- gsub(" ", "_", country)  # Replace spaces with underscores in column name
+  aca_2000[, column_name] <- as.integer(aca_2000$`Country Name` == country)
+}
+```
+
+```{r}
+model2 <- lm_robust(`Out-of-pocket expenditure per capita (current US$)` ~ Post + Treat + Post:Treat + France:Year + Germany:Year + Japan:Year + United_Kingdom:Year + United_States:Year + Canada:Year, data = aca_2000)
+
+summary(model2)
+```
+
+Simple Event Study
+
+```{r}
+model3 <- lm(`Out-of-pocket expenditure per capita (current US$)` ~ Treat:as.factor(Year) + France + Germany + Japan + United_Kingdom + United_States + Canada + as.factor(Year) + `Adolescent fertility rate (births per 1,000 women ages 15-19)` + `Current health expenditure per capita (current US$)` + `Domestic general government health expenditure per capita (current US$)` + `Domestic private health expenditure per capita (current US$)` + `Fertility rate, total (births per woman)` + `GDP (current US$)` + `Immunization, DPT (% of children ages 12-23 months)` + `Immunization, measles (% of children ages 12-23 months)` + `Life expectancy at birth, total (years)` + `Mortality from CVD, cancer, diabetes or CRD between exact ages 30 and 70 (%)` + `Number of infant deaths` + `Number of maternal deaths` + `Population, total` + `Tax revenue (% of GDP)`, data = aca_2000)
+summary(model3)
+```
+
+```{r}
+# Extract the coefficient estimates
+coefficients <- coef(model3)
+
+# Subset the last 20 coefficients
+subset_coefficients <- coefficients[(length(coefficients) - 19):length(coefficients)]
+
+# Print the subset of coefficients
+print(subset_coefficients)
+```
+
+```{r}
+# Create a data frame with 'Year' and subset of coefficients
+coefficients_df <- data.frame(Year = aca_2000$Year, Coefficients = subset_coefficients)
+
+# Print the data frame
+plot(coefficients_df)
+```
+
+```{r}
+model3 <- lm(`Out-of-pocket expenditure per capita (current US$)` ~ Treat:relevel(as.factor(Year), ref = "2009") + relevel(as.factor(Year), ref = "2009") + Treat + France + Germany + Japan + United_Kingdom + United_States + Canada + `Adolescent fertility rate (births per 1,000 women ages 15-19)` + `Current health expenditure per capita (current US$)` + `Domestic general government health expenditure per capita (current US$)` + `Domestic private health expenditure per capita (current US$)` + `Fertility rate, total (births per woman)` + `GDP (current US$)` + `Immunization, DPT (% of children ages 12-23 months)` + `Immunization, measles (% of children ages 12-23 months)` + `Life expectancy at birth, total (years)` + `Mortality from CVD, cancer, diabetes or CRD between exact ages 30 and 70 (%)` + `Number of infant deaths` + `Number of maternal deaths` + `Population, total` + `Tax revenue (% of GDP)`, data = aca_2000)
+summary(model3)
+
+```
+
+```{r}
+# Extract the coefficient estimates
+coefficients <- coef(model3)
+
+# Subset the last 20 coefficients
+did_coefficients <- coefficients[(length(coefficients) - 18):length(coefficients)]
+
+# Print the subset of coefficients
+print(did_coefficients)
+```
+
+```{r}
+
+years <- seq(2000, 2019)
+years <- years[years != 2009]
+
+# Exclude the year 2009 from the data frame
+coefficients_df <- data.frame(years, did_coefficients)
+
+# Print the data frame
+print(coefficients_df)
+
+# Plot the coefficients against the years
+plot(coefficients_df)
+```
+
+```{r}
+years <- seq(2010, 2019)
+```
+
+
+
+
+
+
+
+
+
+
